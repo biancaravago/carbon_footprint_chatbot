@@ -7,7 +7,7 @@ model = joblib.load("carbon_footprint_model.pkl")
 label_encoder = joblib.load("label_encoder.pkl")
 feature_encoders = joblib.load("feature_encoders.pkl")
 
-# Initialize session state for messages and answers
+# Initialize session state
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "question_index" not in st.session_state:
@@ -15,7 +15,7 @@ if "question_index" not in st.session_state:
 if "answers" not in st.session_state:
     st.session_state.answers = {}
 
-# Define chatbot questions
+# Define questions
 questions = [
     ("How many miles do you drive per week?", "miles_per_week"),
     ("How often do you eat red meat?", "meat_freq"),
@@ -26,34 +26,32 @@ questions = [
 
 st.title("🌍 Personal Carbon Footprint Chatbot")
 
-# Display chat history
+# Display message history
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# Ask next question if not finished
+# Ask next question
 if st.session_state.question_index < len(questions):
-    question_text, question_key = questions[st.session_state.question_index]
+    q_text, q_key = questions[st.session_state.question_index]
     with st.chat_message("assistant"):
-        st.markdown(question_text)
+        st.markdown(q_text)
 
     user_input = st.chat_input("Your answer:")
-
     if user_input:
-        # Save the response
         st.session_state.messages.append({"role": "user", "content": user_input})
-        st.session_state.answers[question_key] = user_input.strip()
+        st.session_state.answers[q_key] = user_input.strip()
         st.session_state.question_index += 1
         st.rerun()
+
+# All questions answered
 else:
-    # All questions answered
     with st.chat_message("assistant"):
         st.markdown("Thanks! Calculating your carbon footprint...")
 
-        # Build DataFrame from collected answers
         df = pd.DataFrame([st.session_state.answers])
 
-        # Normalize and encode inputs
+        # Normalization map
         normalized_map = {
             "meat_freq": {
                 "never": "Never", "1-3": "1-3x/week", "few": "1-3x/week", 
@@ -71,17 +69,24 @@ else:
             }
         }
 
+        # Encoding loop
         for col in df.columns:
+            if col == "miles_per_week":
+                try:
+                    df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+                except:
+                    df[col] = 0
+                continue
+
             le = feature_encoders.get(col)
             if le:
                 try:
-                    # Normalize user input before encoding
                     raw_val = df[col].values[0].strip().lower()
                     choices = normalized_map.get(col, {})
                     matched_val = next((v for k, v in choices.items() if k in raw_val), le.classes_[0])
                     df[col] = le.transform([matched_val])
                 except:
-                    df[col] = le.transform([le.classes_[0]])  # fallback
+                    df[col] = le.transform([le.classes_[0]])
 
         # Predict
         prediction = model.predict(df)[0]
