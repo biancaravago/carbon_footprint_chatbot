@@ -1,21 +1,21 @@
 import streamlit as st
 import pandas as pd
 import joblib
-import re
 
 # Load model and encoders
 model = joblib.load("carbon_footprint_model.pkl")
 label_encoder = joblib.load("label_encoder.pkl")
 feature_encoders = joblib.load("feature_encoders.pkl")
 
-# Chat history
+# Initialize session state for messages and answers
 if "messages" not in st.session_state:
     st.session_state.messages = []
+if "question_index" not in st.session_state:
+    st.session_state.question_index = 0
+if "answers" not in st.session_state:
+    st.session_state.answers = {}
 
-# Store user inputs here
-inputs = {}
-
-# Define expected questions and keys
+# Define chatbot questions
 questions = [
     ("How many miles do you drive per week?", "miles_per_week"),
     ("How often do you eat red meat?", "meat_freq"),
@@ -24,57 +24,69 @@ questions = [
     ("Do you own energy-efficient appliances?", "efficient_appliances")
 ]
 
-# Track question progress
-if "question_index" not in st.session_state:
-    st.session_state.question_index = 0
-
 st.title("🌍 Personal Carbon Footprint Chatbot")
 
-# Display past messages
+# Display chat history
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# Ask the next question
+# Ask next question if not finished
 if st.session_state.question_index < len(questions):
-    q_text, q_key = questions[st.session_state.question_index]
+    question_text, question_key = questions[st.session_state.question_index]
     with st.chat_message("assistant"):
-        st.markdown(q_text)
-    
+        st.markdown(question_text)
+
     user_input = st.chat_input("Your answer:")
-    
+
     if user_input:
-        # Show user message
+        # Save the response
         st.session_state.messages.append({"role": "user", "content": user_input})
-        
-        # Save answer
-        inputs[q_key] = user_input.strip()
-        st.session_state.messages.append({"role": "assistant", "content": f"Got it: {user_input}"})
-        
-        # Move to next question
+        st.session_state.answers[question_key] = user_input.strip()
         st.session_state.question_index += 1
         st.rerun()
 else:
     # All questions answered
-    st.markdown("Thanks! Calculating your carbon footprint...")
-
-    # Build input DataFrame
-    input_df = pd.DataFrame([inputs])
-
-    # Encode input data
-    for col in input_df.columns:
-        le = feature_encoders.get(col)
-        if le:
-            try:
-                input_df[col] = le.transform(input_df[col])
-            except:
-                input_df[col] = le.transform([le.classes_[0]])  # fallback to default if unseen value
-
-    # Predict
-    prediction = model.predict(input_df)[0]
-    category = label_encoder.inverse_transform([prediction])[0]
-
     with st.chat_message("assistant"):
+        st.markdown("Thanks! Calculating your carbon footprint...")
+
+        # Build DataFrame from collected answers
+        df = pd.DataFrame([st.session_state.answers])
+
+        # Normalize and encode inputs
+        normalized_map = {
+            "meat_freq": {
+                "never": "Never", "1-3": "1-3x/week", "few": "1-3x/week", 
+                "4-7": "4-7x/week", "daily": "Daily"
+            },
+            "heating_type": {
+                "gas": "Gas", "with gas": "Gas", "natural gas": "Gas", 
+                "electric": "Electric", "wood": "Wood", "none": "None"
+            },
+            "recycles": {
+                "always": "Always", "sometimes": "Sometimes", "never": "Never"
+            },
+            "efficient_appliances": {
+                "yes": "Yes", "no": "No"
+            }
+        }
+
+        for col in df.columns:
+            le = feature_encoders.get(col)
+            if le:
+                try:
+                    # Normalize user input before encoding
+                    raw_val = df[col].values[0].strip().lower()
+                    choices = normalized_map.get(col, {})
+                    matched_val = next((v for k, v in choices.items() if k in raw_val), le.classes_[0])
+                    df[col] = le.transform([matched_val])
+                except:
+                    df[col] = le.transform([le.classes_[0]])  # fallback
+
+        # Predict
+        prediction = model.predict(df)[0]
+        category = label_encoder.inverse_transform([prediction])[0]
+
         st.subheader(f"🧾 Your Carbon Footprint: **{category}**")
 
         tips = {
